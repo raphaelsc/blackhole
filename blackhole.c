@@ -166,7 +166,7 @@ static int obscure(int fd, int newfd, int mapfd, off_t st_size)
 	if (write_to(newfd, (uint8_t *) &st_size, 4))
 		return -1;
 
-	/* Write crc-32 to the beginning of the map file */
+	/* Write crc_32 to the beginning of the map file */
 	crc_32 = crc32_sz(addr, st_size);
 	if (write_to(mapfd, (uint8_t *) &crc_32, 4))
 		return -1;
@@ -306,8 +306,8 @@ static int reveal(int fd, off_t st_size, int mapfd, off_t map_st_size)
 		map_i = (map[i] & 0x0F);
 		buffer[bytes++] = reconstruct_data(table_i, map_i);
 
-		assert(bytes <= PGSIZE_NIBBLES);
-		if (bytes == PGSIZE_NIBBLES) {
+		assert(bytes <= PGSIZE);
+		if (bytes == PGSIZE) {
 			/* TODO: Write the full buffer to the target file */
 
 			bytes = 0;
