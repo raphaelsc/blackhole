@@ -30,11 +30,14 @@
 #include <errno.h>
 #include "crc32.h"
 
-#define BLACKHOLE_FILE_EXTENSION ".bh"
-#define BLACKHOLE_MAPFILE_EXTENSION ".map"
+#define BLACKHOLE_FILE_EXTENSION 	".bh"
+#define BLACKHOLE_MAPFILE_EXTENSION 	".map"
+#define BLACKHOLE_OUTPUT_EXTENSION 	".out"
 
 #define PGSIZE 4096
 #define PGSIZE_NIBBLES (PGSIZE * 2)
+
+#define DEBUG
 
 static uint8_t blackhole_map0[4][4] = {
 	[0] {0x00, 0x01, 0x02, 0x03},
@@ -133,7 +136,16 @@ static uint8_t blackhole_map15[4][4] = {
 	[3] {0xfc, 0xfd, 0xfe, 0xff},
 };
 
-static inline write_to(int fd, const uint8_t *buffer, size_t size)
+static inline int create_file(const char *path)
+{
+	int fd = open(path, O_CREAT | O_EXCL | O_WRONLY, S_IRUSR);
+	if (fd == -1)
+		fprintf(stderr, "open: %s: %s\n", path, strerror(errno));
+
+	return fd;
+}
+
+static inline int write_to(int fd, const uint8_t *buffer, size_t size)
 {
 	int ret = write(fd, buffer, size);
 	if (ret == -1 || ret != size)
@@ -250,7 +262,8 @@ static uint8_t reconstruct_data(uint8_t table_i, uint8_t map_i)
 /*
  * Reveal info given the obscure and map files.
  */
-static int reveal(int fd, off_t st_size, int mapfd, off_t map_st_size)
+static int reveal(int fd, int newfd, int mapfd, off_t st_size,
+		  off_t map_st_size)
 {
 	uint32_t crc_32, file_size, bytes;
 	uint8_t *addr, *map;
@@ -308,7 +321,8 @@ static int reveal(int fd, off_t st_size, int mapfd, off_t map_st_size)
 
 		assert(bytes <= PGSIZE);
 		if (bytes == PGSIZE) {
-			/* TODO: Write the full buffer to the target file */
+			if (write_to(newfd, buffer, PGSIZE))
+				return -1;
 
 			bytes = 0;
 		}
@@ -321,12 +335,13 @@ static int reveal(int fd, off_t st_size, int mapfd, off_t map_st_size)
 		return -1;
 	}
 
-#if 1
-	printf("Bytes read: %u\n", bytes);
+#ifdef DEBUG
+	printf("Remaining bytes: %u\n", bytes);
 	for (i = 0; i < bytes; i++)
 		putchar(buffer[i]);
 #endif
-	/* TODO: Write the remaining bytes to the target file */
+	if (write_to(newfd, buffer, bytes))
+		return -1;
 
 	munmap(addr, st_size);
 	munmap(map, map_st_size);
@@ -369,40 +384,32 @@ int main(int argc, char **argv)
 		snprintf(mapfile, 256, "%s%s", newfile,
 			 BLACKHOLE_MAPFILE_EXTENSION);
 
-		newfd = open(newfile, O_CREAT | O_EXCL | O_WRONLY, S_IRUSR);
-		if (newfd == -1) {
-			fprintf(stderr, "open: %s: %s\n",
-				newfile, strerror(errno));
+		newfd = create_file(newfile);
+		if (newfd == -1)
 			return -1;
-		}
 		printf("Generating obscure file: %s...\n", newfile);
 
-		mapfd = open(mapfile, O_CREAT | O_EXCL | O_WRONLY, S_IRUSR);
-		if (mapfd == -1) {
-			fprintf(stderr, "open: %s: %s\n",
-				mapfile, strerror(errno));
-			unlink(newfile);
-			return -1;
-		}
+		mapfd = create_file(mapfile);
+		if (mapfd == -1)
+			goto unlink_newfile;
 		printf("Generating map file: %s...\n", mapfile);
 
 		ret = obscure(fd, newfd, mapfd, st.st_size);
 		if (ret == -1) {
 			fprintf(stderr, "obscure failed!\n");
-			unlink(newfile);
-			unlink(mapfile);
-			return -1;
+			goto unlink_mapfile;
 		}
-
-		close(newfd);
 	/* Reveal */
 	} else {
+		snprintf(newfile, 256, "%s%s", argv[1],
+			 BLACKHOLE_OUTPUT_EXTENSION);
 		snprintf(mapfile, 256, "%s%s", argv[1],
 			 BLACKHOLE_MAPFILE_EXTENSION);
 
 		mapfd = open(mapfile, O_RDONLY);
 		if (mapfd == -1) {
-			perror("open");
+			fprintf(stderr, "open: %s: %s\n",
+				mapfile, strerror(errno));
 			return -1;
 		}
 
@@ -417,15 +424,26 @@ int main(int argc, char **argv)
 			perror("lseek");
 			return -1;
 		}
+			 
+		newfd = create_file(newfile);
+		if (newfd == -1)
+			return -1;
+		printf("Generating output file: %s...\n", newfile);
 
-		ret = reveal(fd, st.st_size, mapfd, map_st.st_size);
+		ret = reveal(fd, newfd, mapfd, st.st_size, map_st.st_size);
 		if (ret == -1) {
 			fprintf(stderr, "reveal failed!\n");
-			return -1;
+			goto unlink_newfile;
 		}
 	}
 
 	close(fd);
+	close(newfd);
 	close(mapfd);
 	return 0;
+unlink_mapfile:
+	unlink(mapfile);
+unlink_newfile:
+	unlink(newfile);
+	return -1;
 }

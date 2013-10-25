@@ -12,4 +12,4 @@ blackhole: $(OBJ)
 .PHONY: clean
 
 clean:
-	rm -f blackhole *.o *~ *.bh *.map
+	rm -f blackhole *.o *~ *.bh *.map *.out
