@@ -162,9 +162,8 @@ static inline int write_to(int fd, const uint8_t *buffer, size_t size)
  */
 static int obscure(int fd, int newfd, int mapfd, off_t st_size)
 {
-	uint32_t crc_32;
+	uint32_t crc_32, nibbles;
 	uint8_t *addr;
-	uint8_t byte, nibbles;
 	uint8_t byte_i, table_i, map_i;
 	uint8_t tablei_buffer[PGSIZE], mapi_buffer[PGSIZE];
 
@@ -185,9 +184,8 @@ static int obscure(int fd, int newfd, int mapfd, off_t st_size)
 
 	int i;
 	for (i = nibbles = 0; i < st_size; i++) {
-		byte = addr[i];
-		table_i = (byte & TABLE_IDX_MASK) >> 4;
-		map_i = byte & MAP_IDX_MASK;
+		table_i = (addr[i] & TABLE_IDX_MASK) >> 4;
+		map_i = addr[i] & MAP_IDX_MASK;
 
 		assert(nibbles <= PGSIZE_NIBBLES);
 		if (nibbles == PGSIZE_NIBBLES) {
