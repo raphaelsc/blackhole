@@ -290,8 +290,8 @@ static int reveal(int fd, off_t st_size, int mapfd, off_t map_st_size)
 		return -1;
 	}
 
-	int i;
 	/* Start from 4 to skip the 32-bit metadata from both files */
+	int i;
 	for (i = 4; i < st_size; i++) {
 		/* Reconstruct the first byte */
 		table_i = (addr[i] & 0xF0) >> 4;
