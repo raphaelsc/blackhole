@@ -131,23 +131,15 @@ static uint8_t blackhole_map15[4][4] = {
 	[3] {0xfc, 0xfd, 0xfe, 0xff},
 };
 
-static inline write_to(int fd1, int fd2,
-		       const uint8_t *buffer1, const uint8_t *buffer2,
-		       size_t size)
+static inline write_to(int fd, const uint8_t *buffer, size_t size)
 {
-	int ret;
-
-	ret = write(fd1, buffer1, size);
+	int ret = write(fd, buffer, size);
 	if (ret == -1 || ret != size)
-		return -1;
-
-	ret = write(fd2, buffer2, size);
-	if (ret == -1 || ret != size) 
 		return -1;
 
 	return 0;
 }
-	
+
 #define TABLE_IDX_MASK 0xF0
 #define MAP_IDX_MASK 0x0F
 
@@ -175,10 +167,11 @@ static int obscure(int fd, int newfd, int mapfd, off_t st_size)
 
 		assert(nibbles <= PGSIZE_NIBBLES);
 		if (nibbles == PGSIZE_NIBBLES) {
-			if (write_to(newfd, mapfd,
-				     tablei_buffer, mapi_buffer, PGSIZE))
+			if (write_to(newfd, tablei_buffer, PGSIZE))
 				return -1;
-			
+			if (write_to(mapfd, mapi_buffer, PGSIZE))
+				return -1;
+
 			nibbles = 0;
 		}
 
@@ -195,8 +188,9 @@ static int obscure(int fd, int newfd, int mapfd, off_t st_size)
 		byte_i++;
 	}
 
-	if (write_to(newfd, mapfd,
-		     tablei_buffer, mapi_buffer, byte_i))
+	if (write_to(newfd, tablei_buffer, byte_i))
+		return -1;
+	if (write_to(mapfd, mapi_buffer, byte_i))
 		return -1;
 
 	munmap(addr, st_size);
@@ -256,7 +250,7 @@ static int reveal(int fd, off_t st_size, int mapfd, off_t map_st_size)
 		fprintf(stderr, "Size of the files differ!\n");
 		return -1;
 	}
-	
+
 	addr = mmap(NULL, st_size, PROT_READ, MAP_SHARED, fd, 0);
 	if (addr == MAP_FAILED) {
 		perror("map");
@@ -291,7 +285,7 @@ static int reveal(int fd, off_t st_size, int mapfd, off_t map_st_size)
 
 #if 1
 	printf("Bytes read: %d\n", bytes);
-	for (i = 0; i < bytes; i++) 
+	for (i = 0; i < bytes; i++)
 		putchar(buffer[i]);
 #endif
 	/* TODO: Write the remaining bytes to the target file */
@@ -299,15 +293,14 @@ static int reveal(int fd, off_t st_size, int mapfd, off_t map_st_size)
 	munmap(addr, st_size);
 	munmap(map, map_st_size);
 	return 0;
-}	
-	
+}
 
 int main(int argc, char **argv)
 {
 	struct stat st, map_st;
 	int fd, newfd, mapfd, ret;
 	char newfile[256], mapfile[256];
-	
+
 	if (argc != 2) {
 		fprintf(stderr, "usage: %s <file>\n", argv[0]);
 		return -1;
@@ -335,7 +328,7 @@ int main(int argc, char **argv)
 	if (!strstr(argv[1], BLACKHOLE_FILE_EXTENSION)) {
 		snprintf(newfile, 256, "%s%s", argv[1], BLACKHOLE_FILE_EXTENSION);
 		snprintf(mapfile, 256, "%s%s", newfile, BLACKHOLE_MAPFILE_EXTENSION);
-		
+
 		newfd = open(newfile, O_CREAT | O_EXCL | O_WRONLY, S_IRUSR);
 		if (newfd == -1) {
 			perror("open");
@@ -348,10 +341,10 @@ int main(int argc, char **argv)
 			unlink(newfile);
 			return -1;
 		}
-	
+
 		ret = obscure(fd, newfd, mapfd, st.st_size);
 		if (ret == -1) {
-			fprintf(stderr, "obscurate failed!\n");
+			fprintf(stderr, "obscure failed!\n");
 			unlink(newfile);
 			unlink(mapfile);
 			return -1;
@@ -361,7 +354,7 @@ int main(int argc, char **argv)
 	/* Reveal */
 	} else {
 		snprintf(mapfile, 256, "%s%s", argv[1], BLACKHOLE_MAPFILE_EXTENSION);
-		
+
 		mapfd = open(mapfile, O_RDONLY);
 		if (mapfd == -1) {
 			perror("open");
@@ -387,7 +380,7 @@ int main(int argc, char **argv)
 		}
 	}
 
-	close(fd);	
+	close(fd);
 	close(mapfd);
 	return 0;
 }
