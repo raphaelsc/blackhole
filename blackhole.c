@@ -27,6 +27,8 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <assert.h>
+#include <errno.h>
+#include "crc32.h"
 
 #define BLACKHOLE_FILE_EXTENSION ".bh"
 #define BLACKHOLE_MAPFILE_EXTENSION ".map"
@@ -148,6 +150,7 @@ static inline write_to(int fd, const uint8_t *buffer, size_t size)
  */
 static int obscure(int fd, int newfd, int mapfd, off_t st_size)
 {
+	uint32_t crc_32;
 	uint8_t *addr;
 	uint8_t byte, nibbles;
 	uint8_t byte_i, table_i, map_i;
@@ -158,6 +161,15 @@ static int obscure(int fd, int newfd, int mapfd, off_t st_size)
 		perror("map");
 		return -1;
 	}
+
+	/* Write file size to the beginning of the obscure file */
+	if (write_to(newfd, (uint8_t *) &st_size, 4))
+		return -1;
+
+	/* Write crc-32 to the beginning of the map file */
+	crc_32 = crc32_sz(addr, st_size);
+	if (write_to(mapfd, (uint8_t *) &crc_32, 4))
+		return -1;
 
 	int i;
 	for (i = nibbles = 0; i < st_size; i++) {
@@ -240,14 +252,14 @@ static uint8_t reconstruct_data(uint8_t table_i, uint8_t map_i)
  */
 static int reveal(int fd, off_t st_size, int mapfd, off_t map_st_size)
 {
+	uint32_t crc_32, file_size, bytes;
 	uint8_t *addr, *map;
-	uint8_t bytes;
 	uint8_t table_i, map_i;
 	uint8_t buffer[PGSIZE];
 
 	/* Both the obscure and the map file must have the same size */
 	if (st_size != map_st_size) {
-		fprintf(stderr, "Size of the files differ!\n");
+		fprintf(stderr, "Size of obscure and map files differ!\n");
 		return -1;
 	}
 
@@ -263,12 +275,31 @@ static int reveal(int fd, off_t st_size, int mapfd, off_t map_st_size)
 		return -1;
 	}
 
+	crc_32 = *((uint32_t *)map); /* Get crc_32 from map file */
+	file_size = *((uint32_t *)addr); /* Get file size from obscure file */
+	bytes = 0;
+
+	/* - Get size of the obscure file;
+	 * - subtract size of metadata;
+	 * - and multiplies by 2 to get the number of bytes.
+	 */
+	if (((st_size - 4) * 2) - file_size > 1) {
+		fprintf(stderr,
+			"((size of obscure file - 4) * 2) "
+			"shall not differ from file_size by more than 1.\n");
+		return -1;
+	}
+
 	int i;
-	for (i = bytes = 0; i < st_size; i++) {
+	/* Start from 4 to skip the 32-bit metadata from both files */
+	for (i = 4; i < st_size; i++) {
 		/* Reconstruct the first byte */
 		table_i = (addr[i] & 0xF0) >> 4;
 		map_i = (map[i] & 0xF0) >> 4;
 		buffer[bytes++] = reconstruct_data(table_i, map_i);
+
+		if (bytes == file_size)
+			break;
 
 		/* Reconstruct the second byte */
 		table_i = (addr[i] & 0x0F);
@@ -283,8 +314,15 @@ static int reveal(int fd, off_t st_size, int mapfd, off_t map_st_size)
 		}
 	}
 
+	/* Use crc32 to check file integrity */
+	if (crc_32 != crc32_sz(buffer, bytes)) {
+		fprintf(stderr, "Checksum doesn't match: crc_32: %08x\n",
+			crc_32);
+		return -1;
+	}
+
 #if 1
-	printf("Bytes read: %d\n", bytes);
+	printf("Bytes read: %u\n", bytes);
 	for (i = 0; i < bytes; i++)
 		putchar(buffer[i]);
 #endif
@@ -326,21 +364,27 @@ int main(int argc, char **argv)
 
 	/* Obscure */
 	if (!strstr(argv[1], BLACKHOLE_FILE_EXTENSION)) {
-		snprintf(newfile, 256, "%s%s", argv[1], BLACKHOLE_FILE_EXTENSION);
-		snprintf(mapfile, 256, "%s%s", newfile, BLACKHOLE_MAPFILE_EXTENSION);
+		snprintf(newfile, 256, "%s%s", argv[1],
+			 BLACKHOLE_FILE_EXTENSION);
+		snprintf(mapfile, 256, "%s%s", newfile,
+			 BLACKHOLE_MAPFILE_EXTENSION);
 
 		newfd = open(newfile, O_CREAT | O_EXCL | O_WRONLY, S_IRUSR);
 		if (newfd == -1) {
-			perror("open");
+			fprintf(stderr, "open: %s: %s\n",
+				newfile, strerror(errno));
 			return -1;
 		}
+		printf("Generating obscure file: %s...\n", newfile);
 
 		mapfd = open(mapfile, O_CREAT | O_EXCL | O_WRONLY, S_IRUSR);
 		if (mapfd == -1) {
-			perror("open");
+			fprintf(stderr, "open: %s: %s\n",
+				mapfile, strerror(errno));
 			unlink(newfile);
 			return -1;
 		}
+		printf("Generating map file: %s...\n", mapfile);
 
 		ret = obscure(fd, newfd, mapfd, st.st_size);
 		if (ret == -1) {
@@ -353,7 +397,8 @@ int main(int argc, char **argv)
 		close(newfd);
 	/* Reveal */
 	} else {
-		snprintf(mapfile, 256, "%s%s", argv[1], BLACKHOLE_MAPFILE_EXTENSION);
+		snprintf(mapfile, 256, "%s%s", argv[1],
+			 BLACKHOLE_MAPFILE_EXTENSION);
 
 		mapfd = open(mapfile, O_RDONLY);
 		if (mapfd == -1) {
